@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: anatomy-chatbot-api
+  namespace: anatomy-chatbot
+  labels:
+    app.kubernetes.io/name: anatomy-chatbot
+    app.kubernetes.io/component: api
+data:
+  APP_ENV: "production"
+  AWS_REGION: "us-east-1"
+  PORT: "5000"
+  # Non-secret identifiers only — override per environment as needed
+  DYNAMODB_TABLE_NAME: "ChatbotInteractionsMsk3"
+  DYNAMODB_SESSION_TABLE: "ChatbotSessions"
+  USERS_TABLE: "Users"
+  PINECONE_INDEX_NAME: "REPLACE_WITH_INDEX_NAME"
+  # Comma-separated browser origins (CloudFront / custom domain / local)
+  CORS_ORIGINS: "https://REPLACE_CLOUDFRONT_OR_CUSTOM_DOMAIN"

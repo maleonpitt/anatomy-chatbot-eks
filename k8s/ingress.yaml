@@ -1,0 +1,38 @@
+# Requires AWS Load Balancer Controller on the EKS cluster.
+# https://kubernetes-sigs.github.io/aws-load-balancer-controller/
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: anatomy-chatbot-api
+  namespace: anatomy-chatbot
+  labels:
+    app.kubernetes.io/name: anatomy-chatbot
+    app.kubernetes.io/component: api
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    # Attach an ACM certificate ARN for HTTPS:
+    # alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:us-east-1:ACCOUNT:certificate/UUID
+    alb.ingress.kubernetes.io/healthcheck-path: /healthz
+spec:
+  ingressClassName: alb
+  rules:
+    # Optional host: api.example.com
+    - http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: anatomy-chatbot-api
+                port:
+                  number: 80
+          - path: /healthz
+            pathType: Exact
+            backend:
+              service:
+                name: anatomy-chatbot-api
+                port:
+                  number: 80

@@ -1,0 +1,23 @@
+# Optional — scale API pods on CPU
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: anatomy-chatbot-api
+  namespace: anatomy-chatbot
+  labels:
+    app.kubernetes.io/name: anatomy-chatbot
+    app.kubernetes.io/component: api
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: anatomy-chatbot-api
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

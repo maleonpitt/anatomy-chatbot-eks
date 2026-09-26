@@ -1,0 +1,83 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anatomy-chatbot-api
+  namespace: anatomy-chatbot
+  labels:
+    app.kubernetes.io/name: anatomy-chatbot
+    app.kubernetes.io/component: api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: anatomy-chatbot
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: anatomy-chatbot
+        app.kubernetes.io/component: api
+    spec:
+      serviceAccountName: anatomy-chatbot-api
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          # Replace ACCOUNT / REGION / TAG after ECR exists (Phase 5+)
+          image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/anatomy-chatbot-api:REPLACE_TAG
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 5000
+          envFrom:
+            - configMapRef:
+                name: anatomy-chatbot-api
+            - secretRef:
+                name: anatomy-chatbot-api
+                optional: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: anatomy-chatbot-api
+  namespace: anatomy-chatbot
+  labels:
+    app.kubernetes.io/name: anatomy-chatbot
+    app.kubernetes.io/component: api
+  annotations:
+    # Phase 5+: bind to an IAM role for DynamoDB / Secrets Manager (IRSA)
+    # eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT:role/anatomy-chatbot-api
