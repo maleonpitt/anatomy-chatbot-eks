@@ -1,10 +1,11 @@
-version: "3.8"
 services:
-  anatomy-chatbot-be:
-    image: REPLACED_BY_DEPLOY_SCRIPT
-    container_name: anatomy-chatbot-be
-    restart: unless-stopped
-    env_file:
-      - /opt/anatomy-chatbot/env/.backend.env
+  api:
+    build: .
     ports:
       - "5000:5000"
+    env_file:
+      - .env
+    environment:
+      APP_ENV: development
+    # Override multi-worker CMD for local iteration
+    command: ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "5000"]

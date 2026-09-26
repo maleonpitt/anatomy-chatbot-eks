@@ -1,21 +1,23 @@
-# backend/Dockerfile
+# Production-oriented API image for ECR / EKS
 FROM python:3.10-slim
-
-# Install required system packages
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    libpoppler-cpp-dev \
-    pkg-config \
-    python3-dev \
-    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-COPY requirements.txt ./
+# Non-root user for Kubernetes
+RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin appuser
+
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+COPY --chown=appuser:appuser . .
+
+USER appuser
+
+ENV PORT=5000 \
+    PYTHONUNBUFFERED=1 \
+    APP_ENV=production
 
 EXPOSE 5000
 
-CMD ["python", "app.py"]
+# Uvicorn = production ASGI server for FastAPI
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "5000", "--workers", "2"]

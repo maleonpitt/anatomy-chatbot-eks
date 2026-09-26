@@ -1,35 +1,27 @@
 import os
 import json
-import boto3
-import requests
 import traceback
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-from datetime import datetime, timezone
-from dotenv import load_dotenv
-from langchain_openai import OpenAIEmbeddings, ChatOpenAI
-from langchain_community.vectorstores import Pinecone as PineconeStore
-from pinecone import Pinecone as PineconeClient
-import bcrypt
 import uuid
+from datetime import datetime, timezone
+from typing import Any, Optional
 
+import bcrypt
+import boto3
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from pinecone import Pinecone as PineconeClient
+from pydantic import BaseModel, Field
 
 # === Load environment
-# Always load .env first so local settings apply when FLASK_ENV is only set inside that file.
-# If the process is production (e.g. shell or systemd), overlay .env.production.
 load_dotenv(".env")
-if os.getenv("FLASK_ENV") == "production":
+if os.getenv("APP_ENV") == "production" or os.getenv("FLASK_ENV") == "production":
     load_dotenv(".env.production", override=True)
 
 
 def _merge_secrets_manager_into_environ() -> None:
-    """Optional: load a JSON secret from AWS Secrets Manager into os.environ.
-
-    Set AWS_SECRETS_MANAGER_SECRET_ID (name or ARN) or AWS_SECRETS_MANAGER_ARN.
-    Secret must be SecretString containing a JSON object: {\"KEY\": \"value\", ...}.
-    Uses default boto3 credentials (e.g. EC2 instance profile). Keys from the secret
-    override values from dotenv for the same name.
-    """
+    """Optional: load a JSON secret from AWS Secrets Manager into os.environ."""
     secret_id = os.getenv("AWS_SECRETS_MANAGER_SECRET_ID") or os.getenv(
         "AWS_SECRETS_MANAGER_ARN"
     )
@@ -59,8 +51,7 @@ def _merge_secrets_manager_into_environ() -> None:
 _merge_secrets_manager_into_environ()
 
 
-def _cors_allowed_origins():
-    """Explicit origins required when supports_credentials=True (wildcard * is invalid with cookies)."""
+def _cors_allowed_origins() -> list[str]:
     default = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
@@ -71,64 +62,54 @@ def _cors_allowed_origins():
     if not raw:
         return default
     parsed = [o.strip() for o in raw.split(",") if o.strip()]
-    # If CORS_ORIGINS is set but parses to nothing (e.g. ","), use defaults.
     return parsed if parsed else default
 
 
-# === Flask App
-app = Flask(__name__)
-app.secret_key = os.getenv("SESSION_SECRET_KEY")
-# Do not set allow_headers to a short list — axios preflight can request other header names.
-CORS(
-    app,
-    supports_credentials=True,
-    origins=_cors_allowed_origins(),
-    allow_headers="*",
+# === FastAPI app
+app = FastAPI(title="Anatomy Chatbot API", version="1.0.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_allowed_origins(),
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 print("CORS allow origins:", _cors_allowed_origins(), flush=True)
 
 
-# === Debug every request
-@app.before_request
-def log_request_info():
-    if request.method == "OPTIONS":
-        return  # let flask-cors answer preflight without touching body
-    print(f"\n--- Incoming Request ---")
-    print(f"{request.method} {request.url}")
-    print(f"Headers: {dict(request.headers)}")
-    print(f"Body: {request.get_data().decode('utf-8')}")
-    print(f"------------------------\n")
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    if request.method != "OPTIONS":
+        print(f"\n--- Incoming Request ---\n{request.method} {request.url}\n------------------------\n")
+    return await call_next(request)
 
 
 # === AWS
 AWS_ACCESS_KEY = os.getenv("AWS_ACCESS_KEY")
 AWS_SECRET_KEY = os.getenv("AWS_SECRET_KEY")
-# EC2/Docker often omit AWS_REGION in env; boto3 requires an explicit region for DynamoDB.
 AWS_REGION = os.getenv("AWS_REGION") or "us-east-1"
-# Interactions / chat log table (override with DYNAMODB_TABLE_NAME; must match your account)
 DYNAMODB_TABLE_NAME = os.getenv("DYNAMODB_TABLE_NAME", "ChatbotInteractionsMsk3")
 DYNAMODB_SESSION_TABLE = os.getenv("DYNAMODB_SESSION_TABLE", "ChatbotSessions")
 USERS_TABLE = os.getenv("USERS_TABLE", "Users")
 
-dynamodb = boto3.resource(
-    "dynamodb",
-    aws_access_key_id=AWS_ACCESS_KEY,
-    aws_secret_access_key=AWS_SECRET_KEY,
-    region_name=AWS_REGION,
-)
+_dynamodb_kwargs: dict[str, Any] = {"region_name": AWS_REGION}
+if AWS_ACCESS_KEY and AWS_SECRET_KEY:
+    _dynamodb_kwargs["aws_access_key_id"] = AWS_ACCESS_KEY
+    _dynamodb_kwargs["aws_secret_access_key"] = AWS_SECRET_KEY
 
+dynamodb = boto3.resource("dynamodb", **_dynamodb_kwargs)
 interactions_table = dynamodb.Table(DYNAMODB_TABLE_NAME)
 sessions_table = dynamodb.Table(DYNAMODB_SESSION_TABLE)
 users_table = dynamodb.Table(USERS_TABLE)
 
-# === Pinecone + OpenAI (lazy — must not block app startup / CodeDeploy health checks)
+# === Pinecone + OpenAI (lazy — /healthz must stay lightweight)
 _ai_chat_model = None
 _ai_embeddings = None
 _ai_index = None
 
 
 def get_ai_clients():
-    """Load Pinecone + LangChain clients on first use so /healthz works without full config."""
+    """Load Pinecone + LangChain clients on first chat use."""
     global _ai_chat_model, _ai_embeddings, _ai_index
     if _ai_chat_model is not None:
         return _ai_chat_model, _ai_embeddings, _ai_index
@@ -148,26 +129,44 @@ def get_ai_clients():
     return _ai_chat_model, _ai_embeddings, _ai_index
 
 
+# === Request models
+
+
+class AuthRequest(BaseModel):
+    email: str = ""
+    password: str = ""
+
+
+class ChatMessage(BaseModel):
+    role: str = ""
+    content: str = ""
+
+
+class ChatRequest(BaseModel):
+    question: str = ""
+    userEmail: str = "anonymous"
+    conversationHistory: list[ChatMessage] = Field(default_factory=list)
+
+
 # === Routes
 
 
-@app.route("/healthz", methods=["GET"])
+@app.get("/healthz")
 def healthz():
-    """Used by CodeDeploy validate.sh and load balancers; keep lightweight."""
-    return jsonify({"status": "ok"}), 200
+    """Load balancer / Kubernetes probe — keep lightweight."""
+    return {"status": "ok"}
 
 
-@app.route("/api/signup", methods=["POST"])
-def signup():
+@app.post("/api/signup")
+def signup(body: AuthRequest):
     print("✅ Signup route hit")
-    data = request.get_json(silent=True) or {}
-    email = data.get("email", "").strip()
-    password = data.get("password", "").strip()
+    email = body.email.strip()
+    password = body.password.strip()
 
     if not email or not password:
-        return (
-            jsonify({"success": False, "message": "Email and password are required."}),
-            400,
+        raise HTTPException(
+            status_code=400,
+            detail={"success": False, "message": "Email and password are required."},
         )
 
     try:
@@ -178,38 +177,45 @@ def signup():
                 "password": hashed_password.decode("utf-8"),
             }
         )
-        return jsonify({"success": True, "message": "Signup successful!"})
+        return {"success": True, "message": "Signup successful!"}
+    except HTTPException:
+        raise
     except Exception as e:
         print("❌ Signup error:", e)
         traceback.print_exc()
-        return (
-            jsonify({"success": False, "message": "Signup failed. Please try again."}),
-            500,
-        )
+        raise HTTPException(
+            status_code=500,
+            detail={"success": False, "message": "Signup failed. Please try again."},
+        ) from e
 
 
-@app.route("/api/login", methods=["POST"])
-def login():
+@app.post("/api/login")
+def login(body: AuthRequest):
     print("✅ Login route hit")
-    data = request.get_json(silent=True) or {}
-    email = data.get("email", "").strip()
-    password = data.get("password", "").strip()
+    email = body.email.strip()
+    password = body.password.strip()
 
     if not email or not password:
-        return (
-            jsonify({"success": False, "message": "Email and password are required."}),
-            400,
+        raise HTTPException(
+            status_code=400,
+            detail={"success": False, "message": "Email and password are required."},
         )
 
     try:
         response = users_table.get_item(Key={"user_email": email})
         user = response.get("Item")
         if not user:
-            return jsonify({"success": False, "message": "User not found."}), 404
+            raise HTTPException(
+                status_code=404,
+                detail={"success": False, "message": "User not found."},
+            )
         if not bcrypt.checkpw(
             password.encode("utf-8"), user["password"].encode("utf-8")
         ):
-            return jsonify({"success": False, "message": "Invalid credentials."}), 401
+            raise HTTPException(
+                status_code=401,
+                detail={"success": False, "message": "Invalid credentials."},
+            )
 
         session_id = str(uuid.uuid4())
         sessions_table.put_item(
@@ -219,45 +225,50 @@ def login():
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
         )
-
-        return jsonify({"success": True, "session_id": session_id, "user_email": email})
+        return {
+            "success": True,
+            "session_id": session_id,
+            "user_email": email,
+        }
+    except HTTPException:
+        raise
     except Exception as e:
         print("❌ Login error:", e)
         traceback.print_exc()
-        return (
-            jsonify({"success": False, "message": "Login failed. Please try again."}),
-            500,
-        )
+        raise HTTPException(
+            status_code=500,
+            detail={"success": False, "message": "Login failed. Please try again."},
+        ) from e
 
 
-@app.route("/api/chat", methods=["POST"])
-def chat():
+@app.post("/api/chat")
+def chat(body: ChatRequest):
     print("✅ Chat route hit")
     try:
-        data = request.json
-        user_question = data.get("question", "").strip()
-        user_email = data.get("userEmail", "anonymous")
-        conversation_history = data.get("conversationHistory", [])
+        user_question = body.question.strip()
+        user_email = body.userEmail or "anonymous"
+        conversation_history = [
+            {"role": m.role, "content": m.content} for m in body.conversationHistory
+        ]
 
         if not user_question:
-            return jsonify({"answer": "Please ask a valid question."}), 400
+            raise HTTPException(
+                status_code=400,
+                detail={"answer": "Please ask a valid question."},
+            )
 
         chat_model, embeddings, index = get_ai_clients()
 
-        search_query = user_question
-
-        # DYNAMIC SEARCH QUERY EXTRACTION: Use LLM to intelligently extract what to search for
-        # This handles: quiz requests, video location queries, pronoun resolution, etc.
-
-        # Build context for query extraction
         history_section_for_extraction = ""
         if conversation_history:
             history_parts = []
-            for msg in conversation_history[-3:]:  # Last 3 messages
+            for msg in conversation_history[-3:]:
                 role = "Student" if msg.get("role") == "user" else "Assistant"
                 history_parts.append(f"{role}: {msg.get('content', '')}")
             history_for_extraction = "\n".join(history_parts)
-            history_section_for_extraction = f"Conversation History:\n{history_for_extraction}\n\n"
+            history_section_for_extraction = (
+                f"Conversation History:\n{history_for_extraction}\n\n"
+            )
 
         extraction_prompt = f"""You are helping extract the best search query for finding content in course materials.
 
@@ -306,34 +317,29 @@ Search Query (just the topic, no explanation):"""
             include_metadata=True,
         )
 
-        # DEBUG: print raw Pinecone results
         print("🔎 RAW PINECONE RESULTS:")
         for i, match in enumerate(results.matches):
             text_preview = match.metadata.get("text", "")[:100] if match.metadata else ""
             print(f"  [{i}] score={match.score:.4f} | text='{text_preview}'")
 
-        # Pinecone SDK v3+ returns an object, not a dict
         if not results or not results.matches:
-            return jsonify(
-                {
-                    "answer": "I couldn't find relevant information to answer this question."
-                }
-            )
+            return {
+                "answer": "I couldn't find relevant information to answer this question."
+            }
 
-        # Build context with source information (supports both documents and video transcripts)
         retrieved_items = []
         for match in results.matches:
             if match.metadata:
-                item = {
-                    "text": match.metadata.get("text", ""),
-                    "source_type": match.metadata.get("source_type", "document"),
-                    "video_title": match.metadata.get("video_title", ""),
-                    "start_time": match.metadata.get("start_time", ""),
-                    "end_time": match.metadata.get("end_time", ""),
-                }
-                retrieved_items.append(item)
+                retrieved_items.append(
+                    {
+                        "text": match.metadata.get("text", ""),
+                        "source_type": match.metadata.get("source_type", "document"),
+                        "video_title": match.metadata.get("video_title", ""),
+                        "start_time": match.metadata.get("start_time", ""),
+                        "end_time": match.metadata.get("end_time", ""),
+                    }
+                )
 
-        # Format context with source info
         context_parts = []
         has_video_content = False
         for item in retrieved_items:
@@ -347,7 +353,6 @@ Search Query (just the topic, no explanation):"""
 
         formatted_context = "\n\n".join(context_parts)
 
-        # Format conversation history for context
         history_text = ""
         if conversation_history:
             history_parts = []
@@ -356,12 +361,12 @@ Search Query (just the topic, no explanation):"""
                 history_parts.append(f"{role}: {msg.get('content', '')}")
             history_text = "\n".join(history_parts)
 
-        # No more explicit detection - let the LLM handle it naturally!
+        history_section = (
+            f"\n--- RECENT CONVERSATION ---\n{history_text}\n-------------------------\n"
+            if history_text
+            else ""
+        )
 
-        # Build unified prompt - ONE prompt for all scenarios
-        history_section = f"\n--- RECENT CONVERSATION ---\n{history_text}\n-------------------------\n" if history_text else ""
-
-        # Check if video content is present (to inform prompt about available timestamp info)
         video_note = ""
         if has_video_content:
             video_note = " (Note: Video timestamps are available in the course materials below)"
@@ -456,20 +461,19 @@ Remember: You're having a conversation with a student. Use context to understand
         bot_response = chat_response.content.strip()
 
         log_interaction_in_dynamodb(user_question, bot_response, user_email)
+        return {"answer": bot_response}
 
-        return jsonify({"answer": bot_response})
-
+    except HTTPException:
+        raise
     except Exception as e:
         print("❌ Chat error:", e)
         traceback.print_exc()
-        return (
-            jsonify(
-                {
-                    "answer": "An error occurred while processing your question. Please try again."
-                }
-            ),
-            500,
-        )
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "answer": "An error occurred while processing your question. Please try again."
+            },
+        ) from e
 
 
 def log_interaction_in_dynamodb(user_question, bot_response, user_email="anonymous"):
@@ -488,7 +492,20 @@ def log_interaction_in_dynamodb(user_question, bot_response, user_email="anonymo
         traceback.print_exc()
 
 
+# FastAPI returns `detail` for HTTPException; frontend expects flat JSON for some errors.
+# Normalize signup/login/chat client-facing error bodies via exception handler.
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    from fastapi.responses import JSONResponse
+
+    content = exc.detail if isinstance(exc.detail, dict) else {"detail": exc.detail}
+    return JSONResponse(status_code=exc.status_code, content=content)
+
+
 if __name__ == "__main__":
+    import uvicorn
+
     port = int(os.getenv("PORT", 5000))
-    debug = os.getenv("FLASK_ENV") != "production"
-    app.run(debug=debug, host="0.0.0.0", port=port)
+    uvicorn.run("app:app", host="0.0.0.0", port=port, reload=os.getenv("APP_ENV") != "production")

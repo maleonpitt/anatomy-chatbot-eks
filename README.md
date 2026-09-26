@@ -14,7 +14,7 @@ Browser → CloudFront → private S3 → React SPA   (frontend/)
 Backend:
 Browser → ALB Ingress → EKS Service → Pods      (backend/)
   → image from ECR
-  → Flask API (Gunicorn planned)
+  → FastAPI + Uvicorn
   → DynamoDB, Pinecone, OpenAI
 ```
 
@@ -23,7 +23,7 @@ Browser → ALB Ingress → EKS Service → Pods      (backend/)
 | Path | Purpose |
 |------|---------|
 | `frontend/` | React SPA (Create React App) |
-| `backend/` | Flask RAG API + Docker |
+| `backend/` | FastAPI RAG API + Docker (Uvicorn) |
 | `k8s/` | *(Phase 4)* EKS manifests |
 | `terraform/` | *(Phase 5)* ECR / EKS / S3+CloudFront (validate only until authorized) |
 
@@ -31,7 +31,7 @@ Browser → ALB Ingress → EKS Service → Pods      (backend/)
 
 - [x] Phase 1 — public repo scaffold  
 - [x] Phase 2 — app code in monorepo, secrets stripped, no CodeDeploy/EC2 legacy  
-- [ ] Phase 3 — harden API image (Gunicorn)  
+- [x] Phase 3 — FastAPI + Uvicorn production image (non-root)  
 - [ ] Phase 4 — Kubernetes manifests  
 - [ ] Phase 5 — Terraform sketch (no live apply by default)  
 - [ ] Phase 6 — GitHub Actions for CI + image build  
@@ -44,13 +44,23 @@ cd backend
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env   # fill in keys locally — do not commit
-python app.py
+uvicorn app:app --host 0.0.0.0 --port 5000 --reload
 
 # UI (other terminal)
 cd frontend
 npm ci
-# .env.development sets REACT_APP_API_URL=http://localhost:5001 by default
 npm start
+```
+
+Health check: `GET http://localhost:5000/healthz`  
+API docs (dev): `http://localhost:5000/docs`
+
+## Docker (API)
+
+```bash
+cd backend
+docker build -t anatomy-chatbot-api:local .
+docker run --rm -p 5000:5000 --env-file .env anatomy-chatbot-api:local
 ```
 
 ## Safety
