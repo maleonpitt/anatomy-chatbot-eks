@@ -25,7 +25,7 @@ Browser → ALB Ingress → EKS Service → Pods      (backend/)
 | `frontend/` | React SPA (Create React App) |
 | `backend/` | FastAPI RAG API + Docker (Uvicorn) |
 | `k8s/` | EKS manifests (Deployment, Service, Ingress, ConfigMap, …) |
-| `terraform/` | *(Phase 5)* ECR / EKS / S3+CloudFront (validate only until authorized) |
+| `terraform/` | ECR / EKS (opt-in) / S3+CloudFront — validate only until authorized |
 
 ## Status
 
@@ -33,7 +33,7 @@ Browser → ALB Ingress → EKS Service → Pods      (backend/)
 - [x] Phase 2 — app code in monorepo, secrets stripped, no CodeDeploy/EC2 legacy  
 - [x] Phase 3 — FastAPI + Uvicorn production image (non-root)  
 - [x] Phase 4 — Kubernetes manifests (industry-style ConfigMap + External Secrets example)  
-- [ ] Phase 5 — Terraform sketch (no live apply by default)  
+- [x] Phase 5 — Terraform sketch (ECR, optional EKS, S3/CloudFront; no live apply by default)  
 - [ ] Phase 6 — GitHub Actions for CI + image build  
 
 ## Local run (dev)

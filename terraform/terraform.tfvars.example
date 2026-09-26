@@ -1,0 +1,17 @@
+aws_region   = "us-east-1"
+project_name = "anatomy-chatbot"
+environment  = "dev"
+
+# Safe defaults for a practice repo — review before any apply.
+enable_ecr      = true
+enable_frontend = true
+enable_eks      = false # set true only when you intentionally create VPC + EKS
+
+# eks_cluster_version      = "1.29"
+# eks_node_instance_types  = ["t3.medium"]
+# eks_desired_size         = 2
+
+# Optional CloudFront custom domain + API origin
+# domain_aliases      = ["app.example.com"]
+# acm_certificate_arn = "arn:aws:acm:us-east-1:ACCOUNT:certificate/UUID"
+# api_origin_domain   = "api.example.com"
