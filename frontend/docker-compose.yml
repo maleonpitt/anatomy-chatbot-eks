@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  nginx:
+    image: nginx:alpine
+    container_name: anatomy-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx:/etc/nginx/conf.d
+      - ./build:/usr/share/nginx/html
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - /etc/letsencrypt/live:/etc/letsencrypt/live:ro  
+      - /var/lib/letsencrypt:/var/lib/letsencrypt
+      - /var/log/letsencrypt:/var/log/letsencrypt
+    restart: unless-stopped

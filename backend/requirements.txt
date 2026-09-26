@@ -1,0 +1,11 @@
+flask                    # Web framework
+flask-cors               # Handle cross-origin requests from the frontend
+boto3                    # AWS SDK for S3
+langchain                # Workflow orchestration for AI
+openai                   # GPT and embedding generation
+pinecone                 # Pinecone vector database integration
+numpy                    # For embedding similarity calculations
+python-dotenv            # Environment variable management
+langchain-openai
+langchain-community
+bcrypt
