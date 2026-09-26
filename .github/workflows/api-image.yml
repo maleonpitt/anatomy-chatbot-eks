@@ -1,0 +1,72 @@
+# Build API image and optionally push to Amazon ECR.
+# Default: build only (no AWS). Push requires workflow_dispatch inputs + repo secrets.
+#
+# Secrets (only if you enable push):
+#   AWS_ROLE_TO_ASSUME  — IAM role ARN for OIDC (preferred)
+#   or AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (discouraged)
+# Vars:
+#   AWS_REGION (e.g. us-east-1)
+#   ECR_REPOSITORY (e.g. anatomy-chatbot-api)
+
+name: API image
+
+on:
+  workflow_dispatch:
+    inputs:
+      push_to_ecr:
+        description: "Push image to ECR after build (requires AWS auth configured)"
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - ".github/workflows/api-image.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set image metadata
+        id: meta
+        run: |
+          echo "tag=sha-${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
+          echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - name: Build image
+        run: |
+          docker build \
+            -t "anatomy-chatbot-api:${{ steps.meta.outputs.tag }}" \
+            -t "anatomy-chatbot-api:latest" \
+            ./backend
+
+      - name: Configure AWS credentials (OIDC)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.push_to_ecr }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - name: Login to Amazon ECR
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.push_to_ecr }}
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Tag and push to ECR
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.push_to_ecr }}
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          REPOSITORY: ${{ vars.ECR_REPOSITORY || 'anatomy-chatbot-api' }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          test -n "$REGISTRY" || { echo "ECR login failed"; exit 1; }
+          docker tag "anatomy-chatbot-api:${TAG}" "${REGISTRY}/${REPOSITORY}:${TAG}"
+          docker tag "anatomy-chatbot-api:${TAG}" "${REGISTRY}/${REPOSITORY}:latest"
+          docker push "${REGISTRY}/${REPOSITORY}:${TAG}"
+          docker push "${REGISTRY}/${REPOSITORY}:latest"
+          echo "Pushed ${REGISTRY}/${REPOSITORY}:${TAG}"

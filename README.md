@@ -34,7 +34,15 @@ Browser → ALB Ingress → EKS Service → Pods      (backend/)
 - [x] Phase 3 — FastAPI + Uvicorn production image (non-root)  
 - [x] Phase 4 — Kubernetes manifests (industry-style ConfigMap + External Secrets example)  
 - [x] Phase 5 — Terraform sketch (ECR, optional EKS, S3/CloudFront; no live apply by default)  
-- [ ] Phase 6 — GitHub Actions for CI + image build  
+- [x] Phase 6 — GitHub Actions (CI + image build; ECR/S3 push gated on manual dispatch)  
+
+## CI / CD
+
+See [`.github/workflows/README.md`](.github/workflows/README.md).
+
+- **CI** on every PR: backend healthz smoke, frontend build, API `docker build`, `terraform validate`
+- **API image**: builds on backend changes; ECR push is **manual** (`push_to_ecr`)
+- **Frontend static**: manual only; S3 sync gated behind `push_frontend`
 
 ## Local run (dev)
 

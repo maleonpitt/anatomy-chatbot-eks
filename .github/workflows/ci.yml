@@ -1,0 +1,81 @@
+# CI — no AWS mutations. Runs on PRs and main.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Syntax check
+        run: python -m py_compile app.py
+      - name: Healthz smoke (TestClient)
+        run: |
+          python - <<'PY'
+          from fastapi.testclient import TestClient
+          from app import app
+          c = TestClient(app)
+          r = c.get("/healthz")
+          assert r.status_code == 200 and r.json() == {"status": "ok"}, r.text
+          print("healthz ok")
+          PY
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run build
+        env:
+          CI: "true"
+          REACT_APP_API_URL: "http://localhost:5000"
+
+  docker-api:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build API image (local only — no push)
+        run: docker build -t anatomy-chatbot-api:ci ./backend
+
+  terraform:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.5.7"
+      - name: fmt (check)
+        run: terraform fmt -check -recursive
+      - name: init (no backend)
+        run: terraform init -backend=false
+      - name: validate
+        run: terraform validate
